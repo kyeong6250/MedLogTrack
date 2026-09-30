@@ -1,0 +1,86 @@
+-- =============================================================================
+-- Indexing demonstration: idx_usage_transactions_facility_item_date
+--
+-- This is a real EXPLAIN (ANALYZE, BUFFERS) capture from this repo's own
+-- seed data (~37.5k rows in usage_transactions, PostgreSQL 17, default
+-- config, no special tuning) -- not a hypothetical. Reproduce it yourself
+-- with the commands at the bottom of this file.
+--
+-- QUERY UNDER TEST
+-- This is the exact access pattern the low-stock alert, expiration risk,
+-- and facility comparison views all share: "trailing-window usage for one
+-- facility + one item". It is the single hottest read in the whole schema.
+-- =============================================================================
+
+-- SELECT item_id, SUM(quantity) AS total_qty
+-- FROM usage_transactions
+-- WHERE facility_id = 4 AND item_id = 144 AND transaction_date >= CURRENT_DATE - 90
+-- GROUP BY item_id;
+
+-- -----------------------------------------------------------------------------
+-- BEFORE -- no index covering (facility_id, item_id, transaction_date) at all
+-- (idx_usage_transactions_date_brin dropped too, to isolate the effect
+-- cleanly rather than let the BRIN index partially mask it):
+-- -----------------------------------------------------------------------------
+--
+--  GroupAggregate  (cost=0.00..1187.79 rows=1 width=12) (actual time=1.925..1.925 rows=1 loops=1)
+--    Buffers: shared hit=350
+--    ->  Seq Scan on usage_transactions  (cost=0.00..1187.74 rows=14 width=8) (actual time=1.613..1.918 rows=14 loops=1)
+--          Filter: ((facility_id = 4) AND (item_id = 144) AND (transaction_date >= (CURRENT_DATE - 90)))
+--          Rows Removed by Filter: 37219
+--          Buffers: shared hit=350
+--  Planning Time: 0.440 ms
+--  Execution Time: 1.955 ms
+--
+-- Postgres has no way to jump to the ~14 matching rows, so it reads every
+-- one of the table's 350 pages (Rows Removed by Filter: 37219) to find them.
+--
+-- -----------------------------------------------------------------------------
+-- AFTER -- CREATE INDEX idx_usage_transactions_facility_item_date
+--           ON usage_transactions(facility_id, item_id, transaction_date);
+-- -----------------------------------------------------------------------------
+--
+--  GroupAggregate  (cost=4.47..52.43 rows=1 width=12) (actual time=0.038..0.039 rows=1 loops=1)
+--    Buffers: shared hit=11 read=2
+--    ->  Bitmap Heap Scan on usage_transactions  (cost=4.47..52.39 rows=14 width=8) (actual time=0.027..0.033 rows=14 loops=1)
+--          Recheck Cond: ((facility_id = 4) AND (item_id = 144) AND (transaction_date >= (CURRENT_DATE - 90)))
+--          Heap Blocks: exact=11
+--          Buffers: shared hit=11 read=2
+--          ->  Bitmap Index Scan on idx_usage_transactions_facility_item_date  (cost=0.00..4.47 rows=14 width=0) (actual time=0.021..0.021 rows=14 loops=1)
+--                Index Cond: ((facility_id = 4) AND (item_id = 144) AND (transaction_date >= (CURRENT_DATE - 90)))
+--                Buffers: shared read=2
+--  Planning Time: 0.209 ms
+--  Execution Time: 0.061 ms
+--
+-- RESULT: 350 buffer accesses -> 13 (27x fewer), 1.955ms -> 0.061ms (~32x
+-- faster) execution time, on a table of only ~37.5k rows. The gap widens
+-- with scale: Seq Scan cost grows linearly with table size regardless of how
+-- selective the predicate is, while the composite index scan cost tracks the
+-- ~14-row result set and barely moves as the table grows. At real production
+-- volume (multiple facilities x years of daily transactions), this is the
+-- difference between a sub-millisecond dashboard query and a query that
+-- competes with everything else for a full sequential table scan on every
+-- page load -- which is exactly why idx_usage_transactions_facility_item_date
+-- is the one index in this schema we sized the whole indexing strategy around
+-- (see the comment block above it in schema.sql).
+--
+-- -----------------------------------------------------------------------------
+-- To reproduce:
+-- -----------------------------------------------------------------------------
+--   ANALYZE usage_transactions;
+--   DROP INDEX idx_usage_transactions_facility_item_date;
+--   DROP INDEX idx_usage_transactions_date_brin;  -- isolates the effect; see note above
+--   EXPLAIN (ANALYZE, BUFFERS)
+--   SELECT item_id, SUM(quantity) FROM usage_transactions
+--   WHERE facility_id = 4 AND item_id = 144 AND transaction_date >= CURRENT_DATE - 90
+--   GROUP BY item_id;
+--
+--   CREATE INDEX idx_usage_transactions_facility_item_date
+--       ON usage_transactions(facility_id, item_id, transaction_date);
+--   CREATE INDEX idx_usage_transactions_date_brin ON usage_transactions USING BRIN (transaction_date);
+--   ANALYZE usage_transactions;
+--   EXPLAIN (ANALYZE, BUFFERS)
+--   SELECT item_id, SUM(quantity) FROM usage_transactions
+--   WHERE facility_id = 4 AND item_id = 144 AND transaction_date >= CURRENT_DATE - 90
+--   GROUP BY item_id;
+-- =============================================================================

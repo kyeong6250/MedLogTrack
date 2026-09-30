@@ -1,0 +1,222 @@
+# MedLogTrack
+
+A PostgreSQL data model and analytics layer for a military-style medical
+supply chain and inventory management system, loosely modeled on how USAF
+Medical Logistics runs supply across Medical Treatment Facilities (MTFs) —
+medical centers, hospitals, and clinics that each hold their own inventory
+and requisition from a shared pool of vendors.
+
+This is a portfolio project. It's built to demonstrate relational schema
+design and production-style SQL — normalization, constraints, triggers,
+window functions, recursive CTEs, and a transactional multi-table update —
+against a realistic (not toy) dataset: 8 facilities, 15 suppliers, 25
+categories, 150 catalog items, and roughly **18 months of simulated activity
+— ~4,700 inventory lots, ~4,200 requisitions, and ~37,500 usage
+transactions.**
+
+## Why this domain
+
+I spent time as an active-duty Medical Logistics Technician in the USAF,
+responsible for tracking and accounting for $25M+ in emergency medical
+equipment. This schema models the parts of that job that are genuinely
+database problems: knowing what's on hand *by batch* (not just by total),
+knowing what's about to expire before it becomes a write-off, knowing which
+vendors actually deliver on time, and knowing when usage is trending in a
+direction that should change how much you keep on the shelf.
+
+## Repository layout
+
+```
+schema.sql                  DDL: tables, types, constraints, indexes (commented)
+functions_triggers.sql      Triggers, the reorder-quantity function, and the
+                             transactional shipment-receiving procedure
+seed_data.sql                ~46k rows of generated seed data (see below)
+scripts/generate_seed_data.py   The generator that produces seed_data.sql
+queries/                    The 7 analytical queries as views/functions,
+                             one per file, plus the indexing demo
+queries/README.md           Business question -> object, per file
+dashboard/app.py            Read-only Streamlit dashboard over queries/
+```
+
+## Loading it
+
+```bash
+createdb medlogtrack
+psql -U <user> -d medlogtrack -f schema.sql
+psql -U <user> -d medlogtrack -f functions_triggers.sql
+psql -U <user> -d medlogtrack -f seed_data.sql
+for f in queries/0*.sql; do psql -U <user> -d medlogtrack -f "$f"; done
+```
+
+Everything in this repo was written against, and validated against, a real
+local PostgreSQL 17 instance — every `CREATE TABLE`/`CREATE TRIGGER`/`CREATE
+VIEW` here actually runs, every trigger was exercised with both a passing
+and a failing case, and `seed_data.sql` loads clean with zero constraint
+violations. The `EXPLAIN ANALYZE` output in
+[`queries/indexing_demo.sql`](queries/indexing_demo.sql) is a real capture,
+not a hypothetical.
+
+To run the dashboard:
+
+```bash
+pip install -r dashboard/requirements.txt
+export MEDLOGTRACK_HOST=localhost MEDLOGTRACK_DB=medlogtrack MEDLOGTRACK_USER=<user>
+streamlit run dashboard/app.py
+```
+
+## Schema design decisions
+
+**Why third normal form.** Every non-key column in this schema depends on
+its table's whole primary key and nothing else — `supply_items` doesn't
+repeat category metadata, `inventory_lots` doesn't repeat item or facility
+attributes, `requisition_lines` doesn't repeat requisition-header fields.
+The payoff shows up immediately in the query set: `vw_category_spend_rollup`
+can walk the category hierarchy without touching `supply_items`, and
+updating a supplier's contact info is a single-row update that can't
+desync from anything else in the database. The cost — more joins per query
+— is exactly what indexes exist to absorb (see `schema.sql`'s index
+section for the reasoning behind each one).
+
+**Why lot-level tracking instead of a single `quantity_on_hand` per item.**
+A real MTF doesn't hold "300 units of amoxicillin" — it holds three
+specific batches, received on three different dates from three different
+shipments, expiring on three different dates. Collapsing that into one
+number per item would make three things impossible to represent correctly:
+knowing *which* expiration date applies to *which* units on hand (needed
+for the expiration-risk report), issuing the right batch first under FEFO
+(needed to actually reduce waste, not just report on it), and tracing a
+recalled or contaminated batch back to exactly which patients/facilities
+received units from it (an audit-trail requirement real medical logistics
+actually has). `inventory_lots` — one row per facility, per item, per
+received batch — is the grain the rest of the schema is built around.
+
+**Why FEFO (First-Expired-First-Out), not FIFO.** FIFO (oldest-received
+first) is the right discipline for durable, non-perishable stock. For
+anything with an expiration date, though, received-date and expiration-date
+can diverge — a newer shipment can carry a shorter remaining shelf life than
+an older one still sitting on the shelf. Issuing strictly by received-date
+in that situation can let the shorter-dated batch expire unused while the
+longer-dated one gets issued first — the opposite of what minimizes waste.
+`fn_expiration_risk()` ranks lots by `expiration_date` (falling back to
+`received_date` as a tiebreaker) specifically so "use this one next" always
+means "this one expires soonest," not "this one arrived first."
+
+**Kits / bill-of-materials.** `kit_components` is a self-referencing,
+optional layer on top of `supply_items`: a catalog item can itself be
+defined as a kit made of other catalog items (which can themselves be
+kits). This wasn't in the minimum spec but it's a real pattern — IFAKs,
+aid bags, and pre-built trauma kits are all "one NSN that's actually a
+bundle of other NSNs" — and it's what `fn_expand_kit()` (a recursive CTE)
+flattens into a leaf-level parts list.
+
+## Engineering touches
+
+- **Stock guard trigger** (`fn_apply_usage_transaction`, `functions_triggers.sql`):
+  every `usage_transactions` insert is applied to `inventory_lots.quantity_on_hand`
+  live, under a row lock, and rejected outright if it would drive the lot
+  negative — the ledger can never contain a transaction that wasn't actually
+  honored.
+- **Lot status lifecycle**: a trigger sets a lot's initial `active` /
+  `expiring_soon` / `expired` / `depleted` status on insert/update; the
+  time-driven half (a lot crossing into `expiring_soon` purely because a day
+  passed, with no row actually being written) is a documented nightly
+  `pg_cron` job design, implemented as `sp_refresh_lot_status()` so it's
+  runnable today even without `pg_cron` installed — see the comment block in
+  `functions_triggers.sql`.
+- **`fn_recommended_reorder_qty(facility_id, item_id)`**: classic
+  demand-during-lead-time + safety stock − on-hand formula, driven by each
+  facility's own trailing usage and its item's actual last-received
+  supplier's contracted lead time.
+- **`sp_receive_shipment(...)`**: the multi-table "a shipment arrived"
+  update (new lot, `requisition_lines.quantity_fulfilled`, rolled-up
+  `requisitions.status`) wrapped as one procedure — all three effects commit
+  together or none do. Tested with a real overfulfillment rejection that
+  rolls back cleanly (see the procedure's header comment in
+  `functions_triggers.sql` for the test transcript).
+- **Indexing**: `queries/indexing_demo.sql` has a real before/after
+  `EXPLAIN ANALYZE` for the schema's one load-bearing composite index —
+  350 buffer reads and a sequential scan down to 13 buffer reads and a
+  bitmap index scan, ~32x faster, on this repo's own seed data.
+
+## Sample outputs
+
+These are real `psql` output against this repo's committed `seed_data.sql`
+(generated with a fixed random seed, so they're reproducible) — not
+hand-typed examples.
+
+**Low-stock alert** ([`queries/01_low_stock_alert.sql`](queries/01_low_stock_alert.sql)) — items closest to a stockout, worst first:
+
+| facility_name | item_name | quantity_on_hand | reorder_point | days_of_supply_30 | recommended_reorder_qty |
+|---|---|---:|---:|---:|---:|
+| Malcolm Grow Medical Clinic | Nitrile Exam Gloves, Medium Box-100ct | 0 | 336 | 0.0 | 195 |
+| Wright-Patterson Medical Center | Gauze Pad 2x2in Sterile | 61 | 338 | 5.9 | 149 |
+| Mike O'Callaghan Military Medical Center | SAM Splint | 4 | 20 | 6.3 | 7 |
+| Mike O'Callaghan Military Medical Center | Gauze Pad 2x2in Sterile | 87 | 301 | 9.2 | 115 |
+| David Grant USAF Medical Center | SAM Splint | 6 | 20 | 10.0 | 7 |
+
+**Vendor performance scorecard** ([`queries/03_vendor_scorecard.sql`](queries/03_vendor_scorecard.sql)) — best on-time performers:
+
+| supplier_name | contracted_days | actual_days | on_time_pct | fill_rate_pct | rank |
+|---|---:|---:|---:|---:|---:|
+| TrueNorth Pharma Distribution | 4 | 3.7 | 76.2 | 91.5 | 1 |
+| Cardinal Point Distribution | 5 | 4.8 | 69.1 | 92.2 | 2 |
+| Crestline Healthcare Distribution | 5 | 5.1 | 63.6 | 94.5 | 3 |
+| Pinnacle Federal Pharma | 6 | 6.3 | 57.0 | 96.1 | 4 |
+| Summit Surgical & Medical | 6 | 6.4 | 55.3 | 94.0 | 5 |
+
+The seed data includes a deliberately chronic under-performer ("Ironbridge
+Government Solutions") that lands dead last — 0.0% on-time, a 16.4-day
+average lead time against a 7-day contract — so the ranking has a real
+worst case to surface, not just a spread of mediocre-to-good vendors.
+
+**Waste analysis** ([`queries/06_waste_analysis.sql`](queries/06_waste_analysis.sql)) — top wasted catalog items fleet-wide:
+
+| item_name | total_units_wasted | total_waste_value | waste_as_pct_of_total_spend |
+|---|---:|---:|---:|
+| Oseltamivir (Tamiflu) 75mg Capsule Bottle-10ct | 1,636 | $101,432.00 | 48.4% |
+| Influenza Vaccine, Quadrivalent Single-Dose Vial | 4,622 | $87,396.38 | 87.0% |
+| Rapid Influenza Test Kit Box-25ct | 140 | $8,120.00 | 7.7% |
+| MMR Vaccine Single-Dose Vial | 252 | $7,245.00 | 18.6% |
+
+This isn't a coincidence in the generator — flu-season items are modeled
+with a sharp Oct–Jan demand spike (see
+[`queries/04_demand_trend_analysis.sql`](queries/04_demand_trend_analysis.sql)),
+and a meaningful share of what gets ordered for that spike goes unused and
+ages out by the following summer. The waste view and the demand-trend view
+are showing two sides of the same real phenomenon: over-provisioning for a
+seasonal peak has a cost, and this schema can actually quantify it.
+
+## A note on the seed data
+
+`seed_data.sql` is generated by [`scripts/generate_seed_data.py`](scripts/generate_seed_data.py)
+with a fixed random seed and a fixed "anchor date" (documented at the top of
+that script) that all relative dates (received dates, expiration dates,
+"trailing 90 days") are computed from. The 18 months of historical
+usage/requisition data is valid regardless of when you load it; the handful
+of *currently*-relevant results (items below reorder point today, lots
+expiring in the next 30 days) are most illustrative if you load the data
+close to that anchor date, since `CURRENT_DATE`-driven views and triggers
+naturally re-evaluate against whatever "today" actually is when you query
+them. Regenerate with `python scripts/generate_seed_data.py` at any time to
+refresh the anchor date and get a fresh below-reorder-point/expiring-soon
+set for "right now."
+
+Deliberate edge cases baked into the generator (see the "Deliberate edge
+cases" section of the script): 10 facility/item pairs forced below reorder
+point, 10 lots forced to expire within 30 days, one chronically-late
+supplier with real requisition volume behind it, a flu-season demand spike
+on vaccines/antivirals/rapid-test-kits, and a handful of unpredictable
+mass-casualty-exercise usage surges on IV saline layered on top of its
+normal steady demand.
+
+## Limitations / what I'd add next
+
+- No row-level security or application-layer auth model — this is a data
+  layer, not a full application. A real deployment would put RBAC in front
+  of at least the controlled-substances tables.
+- The demand-trend and facility-comparison views are fleet/peer averages;
+  a production version would likely weight them by facility size or patient
+  population rather than treating all 8 MTFs as directly comparable.
+- `sp_refresh_lot_status()` is designed to run under `pg_cron`, documented
+  in `functions_triggers.sql`, but not wired up to an actual scheduler in
+  this repo (that's a deployment concern, not a schema one).
