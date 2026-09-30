@@ -17,9 +17,9 @@
 -- comment on that table for why).
 --
 -- The seed data only nests one level deep (see scripts/generate_seed_data.py
--- -- the CAT tourniquet item doubles as an IFAK-style kit parent), but this
--- function handles arbitrarily deep nesting, which is the point of using a
--- recursive CTE here instead of a fixed number of self-joins.
+-- -- the tourniquet item doubles as a trauma-kit parent), but this function
+-- handles arbitrarily deep nesting, which is the point of using a recursive
+-- CTE here instead of a fixed number of self-joins.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION fn_expand_kit(p_item_id INTEGER, p_quantity INTEGER DEFAULT 1)
@@ -65,9 +65,9 @@ $$ LANGUAGE sql STABLE;
 COMMENT ON FUNCTION fn_expand_kit(INTEGER, INTEGER) IS
     'Recursively flattens a kit-style supply_item into its leaf-level component parts list via kit_components, multiplying quantity_per_kit down through any nested sub-kits. total_quantity_required is per p_quantity kits requested.';
 
--- Example usage: parts list to build 25 IFAK-style kits (component item is
--- "Combat Application Tourniquet (CAT) Gen 7" -- see kit_components seed data).
+-- Example usage: parts list to build 25 trauma kits (kit parent item is
+-- "Emergency Tourniquet Gen 7" -- see kit_components seed data).
 -- SELECT * FROM fn_expand_kit(
---     (SELECT item_id FROM supply_items WHERE item_name = 'Combat Application Tourniquet (CAT) Gen 7'),
+--     (SELECT item_id FROM supply_items WHERE item_name = 'Emergency Tourniquet Gen 7'),
 --     25
 -- );

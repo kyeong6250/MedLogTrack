@@ -4,8 +4,8 @@
 -- BUSINESS QUESTION
 -- "Which items are below reorder point right now, at which facilities, and
 --  how many days of supply do we actually have left based on how fast we're
---  really using it?" — the question a Medical Logistics NCOIC asks every
---  morning before the pick-and-pull shift.
+--  really using it?" — the question a hospital supply chain manager asks
+--  every morning before the day's stock replenishment run.
 --
 -- APPROACH
 -- For every (facility, item) pair currently holding stock, roll up
@@ -47,7 +47,7 @@ SELECT
     f.facility_id,
     f.name AS facility_name,
     si.item_id,
-    si.nsn_code,
+    si.item_code,
     si.item_name,
     ic.category_name,
     COALESCE(oh.quantity_on_hand, 0) AS quantity_on_hand,

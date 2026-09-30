@@ -29,7 +29,7 @@ WITH monthly_usage AS (
 SELECT
     mu.item_id,
     si.item_name,
-    si.nsn_code,
+    si.item_code,
     mu.usage_month,
     mu.total_quantity,
     ROUND(AVG(mu.total_quantity) OVER (
@@ -59,7 +59,7 @@ CREATE OR REPLACE VIEW vw_demand_trend_alerts AS
 SELECT
     vdt.item_id,
     vdt.item_name,
-    vdt.nsn_code,
+    vdt.item_code,
     vdt.usage_month,
     vdt.total_quantity AS current_month_quantity,
     vdt.prior_3mo_avg,

@@ -11,6 +11,10 @@ Deterministic: re-running this script with the same SEED produces byte-
 identical output, which matters for a portfolio repo (the committed
 seed_data.sql should match what this script produces).
 
+DISCLAIMER: every facility, supplier, and price generated below is entirely
+fictional, invented for this demo. None of it refers to any real hospital,
+vendor, or real-world pricing -- see the top-level README for details.
+
 Usage:
     python scripts/generate_seed_data.py
 """
@@ -82,15 +86,17 @@ def section(title):
 # =============================================================================
 section("Facilities")
 
+# Fictional hospital network -- these names, cities, and every downstream
+# price/transaction are invented for this demo, not real facilities.
 FACILITIES = [
-    ("Wright-Patterson Medical Center", "Dayton, OH", "CONUS-Central", "Medical Center"),
-    ("Wilford Hall Ambulatory Surgical Center", "JBSA-Lackland, TX", "CONUS-Central", "Ambulatory Care Clinic"),
-    ("David Grant USAF Medical Center", "Travis AFB, CA", "CONUS-West", "Medical Center"),
-    ("Malcolm Grow Medical Clinic", "JB Andrews, MD", "CONUS-East", "Medical Clinic"),
-    ("Mike O'Callaghan Military Medical Center", "Nellis AFB, NV", "CONUS-West", "Hospital"),
-    ("Eglin AFB Hospital", "Eglin AFB, FL", "CONUS-East", "Hospital"),
-    ("Landstuhl Regional Medical Annex", "Ramstein AB, Germany", "USAFE", "Hospital"),
-    ("Kadena AB Medical Clinic", "Kadena AB, Okinawa, Japan", "PACAF", "Medical Clinic"),
+    ("Cedar Ridge Medical Center", "Columbus, OH", "Midwest", "Medical Center"),
+    ("Lakeshore Ambulatory Surgical Center", "Austin, TX", "South", "Ambulatory Care Clinic"),
+    ("Bayview Regional Medical Center", "Sacramento, CA", "West", "Medical Center"),
+    ("Maple Grove Medical Clinic", "Baltimore, MD", "Northeast", "Medical Clinic"),
+    ("Stonebridge Community Hospital", "Las Vegas, NV", "West", "Hospital"),
+    ("Gulf Coast Hospital", "Pensacola, FL", "South", "Hospital"),
+    ("Northgate Regional Hospital", "Minneapolis, MN", "Midwest", "Hospital"),
+    ("Pacific Crest Medical Clinic", "Portland, OR", "West", "Medical Clinic"),
 ]
 for _, _, _, ft in FACILITIES:
     assert ft in ("Medical Center", "Hospital", "Ambulatory Care Clinic", "Medical Clinic", "Dental Clinic")
@@ -108,20 +114,20 @@ section("Suppliers")
 
 # Fictional vendor names (deliberately not real distributors) — see README.
 SUPPLIERS = [
-    ("Apex Federal Medical Supply", 7, 4.3),
+    ("Apex Medical Supply", 7, 4.3),
     ("Cardinal Point Distribution", 5, 4.6),
     ("Meridian Healthcare Logistics", 10, 3.8),
     ("Sentinel Medical-Surgical", 6, 4.1),
     ("Beacon Biomedical Supply", 12, 3.5),
     ("TrueNorth Pharma Distribution", 4, 4.7),
     ("Vanguard Medical Systems", 8, 4.0),
-    ("Coastal Federal Health Supply", 9, 3.9),
+    ("Coastal Health Supply", 9, 3.9),
     ("Summit Surgical & Medical", 6, 4.2),
-    ("Ironbridge Government Solutions", 7, 2.4),   # deliberate edge case: chronically late (see below)
+    ("Ironbridge Supply Solutions", 7, 2.4),   # deliberate edge case: chronically late (see below)
     ("Crestline Healthcare Distribution", 5, 4.4),
-    ("Pinnacle Federal Pharma", 6, 4.3),
-    ("Harborview Medical Logistics", 11, 3.6),
-    ("Redstone Biomedical Supply", 8, 3.9),
+    ("Pinnacle Pharma Supply", 6, 4.3),
+    ("Harbor Point Medical Logistics", 11, 3.6),
+    ("Redwood Biomedical Supply", 8, 3.9),
     ("Whitfield Medical-Surgical Distribution", 7, 4.1),
 ]
 out.extend(insert_stmt(
@@ -134,7 +140,7 @@ out.extend(insert_stmt(
      for i, (n, lt, rr) in enumerate(SUPPLIERS)]
 ))
 SUPPLIER_IDS = list(range(1, len(SUPPLIERS) + 1))
-LATE_SUPPLIER_ID = 10  # Ironbridge Government Solutions
+LATE_SUPPLIER_ID = 10  # Ironbridge Supply Solutions
 SUPPLIER_ROWS_BY_ID = {
     i + 1: {"name": n, "contracted_lead_time_days": lt, "reliability_rating": rr}
     for i, (n, lt, rr) in enumerate(SUPPLIERS)
@@ -290,9 +296,9 @@ add_items("Sutures & Surgical Supplies", "Scalpel, Disposable #10", "BX", 14.50,
 add_items("Sutures & Surgical Supplies", "Surgical Drape, Sterile", "BX", 28.90, True, 1460, "low", ["Box-25ct"])
 
 # --- Trauma & Hemorrhage Control ---
-add_items("Trauma & Hemorrhage Control", "Combat Application Tourniquet (CAT)", "EA", 32.00, False, None, "medium", ["Gen 7"])
-add_items("Trauma & Hemorrhage Control", "Hemostatic Gauze, Combat Gauze", "EA", 45.50, True, 1095, "medium", ["Roll"])
-add_items("Trauma & Hemorrhage Control", "Israeli Battle Dressing", "EA", 11.20, False, None, "medium", ["6in"])
+add_items("Trauma & Hemorrhage Control", "Emergency Tourniquet", "EA", 32.00, False, None, "medium", ["Gen 7"])
+add_items("Trauma & Hemorrhage Control", "Hemostatic Gauze", "EA", 45.50, True, 1095, "medium", ["Roll"])
+add_items("Trauma & Hemorrhage Control", "Emergency Trauma Dressing", "EA", 11.20, False, None, "medium", ["6in"])
 add_items("Trauma & Hemorrhage Control", "Trauma Shears", "EA", 8.40, False, None, "low", ["7.25in"])
 
 # --- Sterilization Supplies ---
@@ -398,14 +404,15 @@ while len(ITEM_TEMPLATES) < 150:
 ITEM_TEMPLATES = ITEM_TEMPLATES[:150]
 assert len(ITEM_TEMPLATES) == 150
 
-def make_nsn(i):
-    fsc = 6505 if i % 3 != 2 else 6515
-    return f"{fsc}-{(i * 37) % 99:02d}-{(i * 211) % 999:03d}-{(i * 733) % 9999:04d}"
+def make_item_code(i):
+    # Internal catalog stock number, hospital-supply-chain style (not a real
+    # standard code, just a plausible-looking internal SKU): MS-#####-##
+    return f"MS-{10000 + (i * 733) % 90000:05d}-{(i * 37) % 99:02d}"
 
 item_rows = []
 ITEMS = []  # parallel list of dicts with resolved item_id and metadata
 for idx, (name, cat, unit, cost, exp_tracked, shelf, tier) in enumerate(ITEM_TEMPLATES, start=1):
-    nsn = make_nsn(idx)
+    item_code = make_item_code(idx)
     # reorder point / safety stock scaled loosely by usage tier and unit cost
     if tier == "high":
         reorder, safety = random.randint(300, 600), random.randint(80, 180)
@@ -418,7 +425,7 @@ for idx, (name, cat, unit, cost, exp_tracked, shelf, tier) in enumerate(ITEM_TEM
     else:  # rare / durable
         reorder, safety = random.randint(2, 10), random.randint(1, 3)
 
-    item_rows.append((nsn, name, CATEGORY_ID[cat], unit, reorder, safety, cost, exp_tracked))
+    item_rows.append((item_code, name, CATEGORY_ID[cat], unit, reorder, safety, cost, exp_tracked))
     ITEMS.append({
         "item_id": idx, "name": name, "category": cat, "unit": unit,
         "reorder_point": reorder, "safety_stock": safety, "unit_cost": cost,
@@ -427,7 +434,7 @@ for idx, (name, cat, unit, cost, exp_tracked, shelf, tier) in enumerate(ITEM_TEM
 
 out.extend(insert_stmt(
     "supply_items",
-    ["nsn_code", "item_name", "category_id", "unit_of_issue", "reorder_point",
+    ["item_code", "item_name", "category_id", "unit_of_issue", "reorder_point",
      "safety_stock_level", "unit_cost", "is_expiration_tracked"],
     item_rows
 ))
@@ -439,25 +446,25 @@ ITEM_BY_NAME = {it["name"]: it for it in ITEMS}
 # =============================================================================
 section("Kit components (bill-of-materials)")
 
-# We reuse existing catalog items as kit "parents" — e.g. the CAT tourniquet
-# item doubles as a loose component, while these two items represent
-# assembled kits built from other catalog items. quantity_per_kit is the
-# count of each component needed to build one of the parent kit.
+# We reuse existing catalog items as kit "parents" — e.g. the tourniquet item
+# doubles as a loose component, while also being the parent of a pre-built
+# trauma response kit assembled from other catalog items. quantity_per_kit is
+# the count of each component needed to build one of the parent kit.
 kit_component_rows = []
-KIT_PARENT_NAME = "Combat Application Tourniquet (CAT) Gen 7"
-ifak_components = [
-    ("Hemostatic Gauze, Combat Gauze Roll", 1),
-    ("Israeli Battle Dressing 6in", 1),
+KIT_PARENT_NAME = "Emergency Tourniquet Gen 7"
+trauma_kit_components = [
+    ("Hemostatic Gauze Roll", 1),
+    ("Emergency Trauma Dressing 6in", 1),
     ("Occlusive Chest Seal Vented Seal", 2),
     ("Nitrile Exam Gloves, Medium Box-100ct", 2),
     ("Trauma Shears 7.25in", 1),
 ]
-for comp_name, qty in ifak_components:
+for comp_name, qty in trauma_kit_components:
     kit_component_rows.append((ITEM_BY_NAME[KIT_PARENT_NAME]["item_id"],
                                 ITEM_BY_NAME[comp_name]["item_id"], qty))
 
-# NOTE: kit_component_rows above intentionally reuses the CAT tourniquet item
-# as a stand-in "kit parent" (an IFAK built around a CAT) rather than
+# NOTE: kit_component_rows above intentionally reuses the tourniquet item as
+# a stand-in "kit parent" (a trauma response kit built around it) rather than
 # inventing a synthetic catalog item with no real usage/lot history — keeps
 # every id in the demo joinable back to the same usage/inventory data
 # reviewers already see.
@@ -480,8 +487,10 @@ LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Mille
               "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
               "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Lee", "Perez", "Thompson",
               "White", "Harris", "Sanchez", "Clark", "Ramirez", "Lewis", "Robinson"]
-RANKS = ["A1C", "SrA", "SSgt", "TSgt", "MSgt", "2Lt", "1Lt", "Capt", "Maj", "GS-9", "GS-11"]
-ROLES = ["Medical Logistics Technician", "Medical Logistics Officer", "NCOIC", "Flight Commander",
+RANKS = ["Technician I", "Technician II", "Senior Technician", "Team Lead", "Supervisor",
+         "Coordinator", "Manager", "Director"]
+# Must match schema.sql's personnel_role_enum values exactly.
+ROLES = ["Supply Chain Technician", "Supply Chain Manager", "Inventory Supervisor", "Materials Manager",
          "Approving Official", "Pharmacy Technician", "Biomedical Equipment Technician"]
 
 personnel_rows = []
@@ -499,7 +508,7 @@ for fid in FACILITY_IDS:
         personnel_id += 1
         rank = random.choice(RANKS)
         role = random.choice(ROLES)
-        email = f"{fn.lower()}.{ln.lower()}.{fid}@us.af.mil"
+        email = f"{fn.lower()}.{ln.lower()}.{fid}@example-hospital.org"
         personnel_rows.append((fid, fn, ln, rank, role, email))
         PERSONNEL_BY_FACILITY[fid].append(personnel_id)
 

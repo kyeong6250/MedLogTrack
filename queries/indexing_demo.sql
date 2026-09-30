@@ -2,7 +2,7 @@
 -- Indexing demonstration: idx_usage_transactions_facility_item_date
 --
 -- This is a real EXPLAIN (ANALYZE, BUFFERS) capture from this repo's own
--- seed data (~37.5k rows in usage_transactions, PostgreSQL 17, default
+-- seed data (~38.3k rows in usage_transactions, PostgreSQL 17, default
 -- config, no special tuning) -- not a hypothetical. Reproduce it yourself
 -- with the commands at the bottom of this file.
 --
@@ -14,7 +14,7 @@
 
 -- SELECT item_id, SUM(quantity) AS total_qty
 -- FROM usage_transactions
--- WHERE facility_id = 4 AND item_id = 144 AND transaction_date >= CURRENT_DATE - 90
+-- WHERE facility_id = 4 AND item_id = 39 AND transaction_date >= CURRENT_DATE - 90
 -- GROUP BY item_id;
 
 -- -----------------------------------------------------------------------------
@@ -23,40 +23,40 @@
 -- cleanly rather than let the BRIN index partially mask it):
 -- -----------------------------------------------------------------------------
 --
---  GroupAggregate  (cost=0.00..1187.79 rows=1 width=12) (actual time=1.925..1.925 rows=1 loops=1)
---    Buffers: shared hit=350
---    ->  Seq Scan on usage_transactions  (cost=0.00..1187.74 rows=14 width=8) (actual time=1.613..1.918 rows=14 loops=1)
---          Filter: ((facility_id = 4) AND (item_id = 144) AND (transaction_date >= (CURRENT_DATE - 90)))
---          Rows Removed by Filter: 37219
---          Buffers: shared hit=350
---  Planning Time: 0.440 ms
---  Execution Time: 1.955 ms
+--  GroupAggregate  (cost=0.00..1220.29 rows=1 width=12) (actual time=1.648..1.648 rows=1 loops=1)
+--    Buffers: shared hit=359
+--    ->  Seq Scan on usage_transactions  (cost=0.00..1220.23 rows=19 width=8) (actual time=1.421..1.640 rows=20 loops=1)
+--          Filter: ((facility_id = 4) AND (item_id = 39) AND (transaction_date >= (CURRENT_DATE - 90)))
+--          Rows Removed by Filter: 38257
+--          Buffers: shared hit=359
+--  Planning Time: 0.294 ms
+--  Execution Time: 1.669 ms
 --
--- Postgres has no way to jump to the ~14 matching rows, so it reads every
--- one of the table's 350 pages (Rows Removed by Filter: 37219) to find them.
+-- Postgres has no way to jump to the ~20 matching rows, so it reads every
+-- one of the table's 359 pages (Rows Removed by Filter: 38257) to find them.
 --
 -- -----------------------------------------------------------------------------
 -- AFTER -- CREATE INDEX idx_usage_transactions_facility_item_date
 --           ON usage_transactions(facility_id, item_id, transaction_date);
 -- -----------------------------------------------------------------------------
 --
---  GroupAggregate  (cost=4.47..52.43 rows=1 width=12) (actual time=0.038..0.039 rows=1 loops=1)
---    Buffers: shared hit=11 read=2
---    ->  Bitmap Heap Scan on usage_transactions  (cost=4.47..52.39 rows=14 width=8) (actual time=0.027..0.033 rows=14 loops=1)
---          Recheck Cond: ((facility_id = 4) AND (item_id = 144) AND (transaction_date >= (CURRENT_DATE - 90)))
---          Heap Blocks: exact=11
---          Buffers: shared hit=11 read=2
---          ->  Bitmap Index Scan on idx_usage_transactions_facility_item_date  (cost=0.00..4.47 rows=14 width=0) (actual time=0.021..0.021 rows=14 loops=1)
---                Index Cond: ((facility_id = 4) AND (item_id = 144) AND (transaction_date >= (CURRENT_DATE - 90)))
+--  GroupAggregate  (cost=4.52..64.89 rows=1 width=12) (actual time=0.044..0.044 rows=1 loops=1)
+--    Buffers: shared hit=14 read=2
+--    ->  Bitmap Heap Scan on usage_transactions  (cost=4.52..64.84 rows=18 width=8) (actual time=0.031..0.039 rows=20 loops=1)
+--          Recheck Cond: ((facility_id = 4) AND (item_id = 39) AND (transaction_date >= (CURRENT_DATE - 90)))
+--          Heap Blocks: exact=14
+--          Buffers: shared hit=14 read=2
+--          ->  Bitmap Index Scan on idx_usage_transactions_facility_item_date  (cost=0.00..4.52 rows=18 width=0) (actual time=0.024..0.024 rows=20 loops=1)
+--                Index Cond: ((facility_id = 4) AND (item_id = 39) AND (transaction_date >= (CURRENT_DATE - 90)))
 --                Buffers: shared read=2
---  Planning Time: 0.209 ms
---  Execution Time: 0.061 ms
+--  Planning Time: 0.203 ms
+--  Execution Time: 0.066 ms
 --
--- RESULT: 350 buffer accesses -> 13 (27x fewer), 1.955ms -> 0.061ms (~32x
--- faster) execution time, on a table of only ~37.5k rows. The gap widens
--- with scale: Seq Scan cost grows linearly with table size regardless of how
+-- RESULT: 359 buffer accesses -> 16 (~22x fewer), 1.669ms -> 0.066ms (~25x
+-- faster) execution time, on a table of only ~38k rows. The gap widens with
+-- scale: Seq Scan cost grows linearly with table size regardless of how
 -- selective the predicate is, while the composite index scan cost tracks the
--- ~14-row result set and barely moves as the table grows. At real production
+-- ~20-row result set and barely moves as the table grows. At real production
 -- volume (multiple facilities x years of daily transactions), this is the
 -- difference between a sub-millisecond dashboard query and a query that
 -- competes with everything else for a full sequential table scan on every
@@ -72,7 +72,7 @@
 --   DROP INDEX idx_usage_transactions_date_brin;  -- isolates the effect; see note above
 --   EXPLAIN (ANALYZE, BUFFERS)
 --   SELECT item_id, SUM(quantity) FROM usage_transactions
---   WHERE facility_id = 4 AND item_id = 144 AND transaction_date >= CURRENT_DATE - 90
+--   WHERE facility_id = 4 AND item_id = 39 AND transaction_date >= CURRENT_DATE - 90
 --   GROUP BY item_id;
 --
 --   CREATE INDEX idx_usage_transactions_facility_item_date
@@ -81,6 +81,6 @@
 --   ANALYZE usage_transactions;
 --   EXPLAIN (ANALYZE, BUFFERS)
 --   SELECT item_id, SUM(quantity) FROM usage_transactions
---   WHERE facility_id = 4 AND item_id = 144 AND transaction_date >= CURRENT_DATE - 90
+--   WHERE facility_id = 4 AND item_id = 39 AND transaction_date >= CURRENT_DATE - 90
 --   GROUP BY item_id;
 -- =============================================================================

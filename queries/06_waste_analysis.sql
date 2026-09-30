@@ -58,7 +58,7 @@ CREATE OR REPLACE VIEW vw_waste_by_item AS
 SELECT
     si.item_id,
     si.item_name,
-    si.nsn_code,
+    si.item_code,
     ic.category_name,
     COUNT(*) AS waste_event_count,
     SUM(ut.quantity) AS total_units_wasted,
@@ -72,7 +72,7 @@ JOIN inventory_lots il ON il.lot_id = ut.lot_id
 JOIN supply_items si ON si.item_id = ut.item_id
 JOIN item_categories ic ON ic.category_id = si.category_id
 WHERE ut.transaction_type = 'waste'
-GROUP BY si.item_id, si.item_name, si.nsn_code, ic.category_name
+GROUP BY si.item_id, si.item_name, si.item_code, ic.category_name
 ORDER BY total_waste_value DESC;
 
 COMMENT ON VIEW vw_waste_by_item IS

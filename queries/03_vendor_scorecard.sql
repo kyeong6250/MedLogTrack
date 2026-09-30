@@ -4,7 +4,7 @@
 -- BUSINESS QUESTION
 -- "Which suppliers are actually hitting their promised lead times and
 --  filling what we order, and how do they rank against each other?" — the
---  data a contracting officer needs before a contract renewal conversation.
+--  data a procurement manager needs before a contract renewal conversation.
 --
 -- APPROACH
 -- Only requisitions that were actually (at least partially) fulfilled carry

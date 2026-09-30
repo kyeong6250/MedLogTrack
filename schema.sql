@@ -1,8 +1,13 @@
 -- =============================================================================
 -- MedLogTrack — Schema DDL
--- A military-style medical supply chain / inventory management data model,
--- loosely modeled on how USAF Medical Logistics runs supply across Medical
--- Treatment Facilities (MTFs).
+-- A medical supply chain / inventory management data model for a multi-site
+-- hospital network — multiple facilities (medical centers, hospitals, and
+-- clinics) each holding their own inventory and requisitioning from a shared
+-- pool of vendors.
+--
+-- NOTE: This is a portfolio/demo project. Every facility, supplier, price,
+-- and transaction in this repo's seed data is fictional and synthetically
+-- generated — none of it reflects any real hospital, vendor, or pricing.
 --
 -- Target: PostgreSQL 14+ (developed/validated on PostgreSQL 17).
 -- Design notes on normalization, lot-level tracking, and FEFO live in the
@@ -67,10 +72,10 @@ CREATE TYPE lot_status_enum AS ENUM (
 );
 
 CREATE TYPE personnel_role_enum AS ENUM (
-    'Medical Logistics Technician',
-    'Medical Logistics Officer',
-    'NCOIC',
-    'Flight Commander',
+    'Supply Chain Technician',
+    'Supply Chain Manager',
+    'Inventory Supervisor',
+    'Materials Manager',
     'Approving Official',
     'Pharmacy Technician',
     'Biomedical Equipment Technician'
@@ -84,14 +89,14 @@ CREATE TABLE facilities (
     facility_id     SERIAL PRIMARY KEY,
     name            VARCHAR(120) NOT NULL,
     location        VARCHAR(120) NOT NULL,          -- "city, state" or "city, country"
-    region          VARCHAR(40)  NOT NULL,           -- e.g. 'CONUS-East', 'PACAF', 'USAFE'
+    region          VARCHAR(40)  NOT NULL,           -- e.g. 'Northeast', 'Midwest', 'South', 'West'
     facility_type   facility_type_enum NOT NULL,
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT uq_facilities_name UNIQUE (name)
 );
-COMMENT ON TABLE facilities IS 'Medical Treatment Facilities (MTFs): medical centers, hospitals, and clinics that hold inventory and submit requisitions.';
+COMMENT ON TABLE facilities IS 'Facilities in the hospital network: medical centers, hospitals, and clinics that hold inventory and submit requisitions.';
 
 CREATE TABLE suppliers (
     supplier_id             SERIAL PRIMARY KEY,
@@ -107,7 +112,7 @@ CREATE TABLE suppliers (
     CONSTRAINT uq_suppliers_name UNIQUE (name)
 );
 COMMENT ON TABLE suppliers IS 'Vendors who fulfill requisitions. contracted_lead_time_days is the SLA promise; actual performance is derived from requisitions in the vendor scorecard view, never stored redundantly here.';
-COMMENT ON COLUMN suppliers.reliability_rating IS 'Manually-assigned baseline rating (contracting-officer judgment call at onboarding), distinct from the computed on-time-fulfillment metrics in vw_vendor_scorecard.';
+COMMENT ON COLUMN suppliers.reliability_rating IS 'Manually-assigned baseline rating (procurement team judgment call at vendor onboarding), distinct from the computed on-time-fulfillment metrics in vw_vendor_scorecard.';
 
 -- Self-referencing hierarchy: top-level categories (Pharmaceuticals,
 -- Consumables, Durable Medical Equipment, Controlled Substances) with nested
@@ -128,7 +133,7 @@ COMMENT ON TABLE item_categories IS 'Self-referencing category hierarchy (root c
 
 CREATE TABLE supply_items (
     item_id                SERIAL PRIMARY KEY,
-    nsn_code               VARCHAR(20) NOT NULL,     -- stock-number style code, e.g. '6505-01-566-3529'
+    item_code               VARCHAR(20) NOT NULL,     -- internal catalog stock number, e.g. 'MS-6505-11234'
     item_name               VARCHAR(150) NOT NULL,
     category_id              INTEGER NOT NULL REFERENCES item_categories(category_id) ON DELETE RESTRICT,
     unit_of_issue             VARCHAR(10) NOT NULL,    -- EA, BX, CS, VI, BT, PR, RO, TU, KT ...
@@ -139,20 +144,21 @@ CREATE TABLE supply_items (
     is_active                      BOOLEAN NOT NULL DEFAULT TRUE,
     created_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    CONSTRAINT uq_supply_items_nsn UNIQUE (nsn_code),
+    CONSTRAINT uq_supply_items_code UNIQUE (item_code),
     -- Safety stock is a floor that should sit at or below the reorder point
     -- (you reorder before you dip into the safety cushion); flags data-entry
     -- mistakes at insert time instead of downstream in a report.
     CONSTRAINT ck_supply_items_safety_le_reorder CHECK (safety_stock_level <= reorder_point)
 );
-COMMENT ON TABLE supply_items IS 'Catalog of items an MTF can stock — the "what", not the "how much is on hand where" (that is inventory_lots).';
+COMMENT ON TABLE supply_items IS 'Catalog of items a facility can stock — the "what", not the "how much is on hand where" (that is inventory_lots).';
 COMMENT ON COLUMN supply_items.is_expiration_tracked IS 'FALSE for most durable equipment; TRUE for pharmaceuticals and most consumables. inventory_lots.expiration_date is expected to be NULL exactly when this is FALSE (enforced by trigger, not a CHECK, because it spans two tables).';
 
 -- Bill-of-materials style kit composition: a supply_item can itself be a "kit"
--- made of other supply_items (e.g. an Individual First Aid Kit made of a
+-- made of other supply_items (e.g. a trauma response kit made of a
 -- tourniquet, gauze, and a chest seal). Components can themselves be kits,
--- enabling nested kits (e.g. a medic aid bag containing several IFAKs) —
--- expanded recursively in queries/08_kit_bom_expansion.sql.
+-- enabling nested kits (e.g. a crash cart restock kit containing several
+-- smaller trauma kits) — expanded recursively in
+-- queries/08_kit_bom_expansion.sql.
 CREATE TABLE kit_components (
     parent_item_id       INTEGER NOT NULL REFERENCES supply_items(item_id) ON DELETE CASCADE,
     component_item_id     INTEGER NOT NULL REFERENCES supply_items(item_id) ON DELETE RESTRICT,

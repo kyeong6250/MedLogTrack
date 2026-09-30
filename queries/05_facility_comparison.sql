@@ -4,7 +4,7 @@
 -- BUSINESS QUESTION
 -- "Which facilities are sitting on more of an item than their own usage
 --  justifies, while another facility is running short of the same item —
---  i.e. where's a lateral transfer between MTFs cheaper than a new buy?"
+--  i.e. where's a lateral transfer between facilities cheaper than a new buy?"
 --
 -- APPROACH
 -- For each (facility, item), express current on-hand as "days of supply at
@@ -51,7 +51,7 @@ SELECT
     f.name AS facility_name,
     p.item_id,
     si.item_name,
-    si.nsn_code,
+    si.item_code,
     p.quantity_on_hand,
     ROUND(COALESCE(p.avg_daily_usage_90, 0), 2) AS avg_daily_usage_90,
     ROUND(p.days_of_supply_90, 1) AS days_of_supply_90,
@@ -113,7 +113,7 @@ WHERE over_stocked.stock_position = 'OVER_STOCKED'
 ORDER BY over_stocked.item_name, source_days_of_supply DESC;
 
 COMMENT ON VIEW vw_redistribution_candidates IS
-    'Pairs an over-stocked facility with an under-stocked facility carrying the same item, with a conservative suggested transfer quantity -- the "move stock between MTFs instead of buying more" recommendation.';
+    'Pairs an over-stocked facility with an under-stocked facility carrying the same item, with a conservative suggested transfer quantity -- the "move stock between facilities instead of buying more" recommendation.';
 
 -- Example usage: full stock-position board for one item across all facilities.
 -- SELECT facility_name, quantity_on_hand, days_of_supply_90, peer_avg_days_of_supply, stock_position
